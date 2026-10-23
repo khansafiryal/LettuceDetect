@@ -28,6 +28,8 @@ class Trainer:
         learning_rate: float = 1e-5,
         save_path: str = "best_model",
         device: torch.device | None = None,
+        grad_accum_steps: int = 1,
+        bf16: bool = False,
     ):
         """Initialize the trainer.
 
@@ -39,6 +41,9 @@ class Trainer:
         :param learning_rate: Learning rate for optimization
         :param save_path: Path to save the best model
         :param device: Device to train on (defaults to cuda if available)
+        :param grad_accum_steps: Number of batches to accumulate gradients over
+            before each optimizer step (effective batch = batch size * steps)
+        :param bf16: Run the forward pass under bfloat16 autocast to cut memory use
         """
         self.model = model
         self.tokenizer = tokenizer
@@ -48,6 +53,8 @@ class Trainer:
         self.learning_rate = learning_rate
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.save_path = save_path
+        self.grad_accum_steps = max(1, grad_accum_steps)
+        self.bf16 = bf16
 
         self.optimizer: Optimizer = torch.optim.AdamW(
             self.model.parameters(), lr=self.learning_rate
@@ -80,16 +87,19 @@ class Trainer:
 
             progress_bar = tqdm(self.train_loader, desc="Training", leave=True)
 
-            for batch in progress_bar:
-                self.optimizer.zero_grad()
-                outputs = self.model(
-                    batch["input_ids"].to(self.device),
-                    attention_mask=batch["attention_mask"].to(self.device),
-                    labels=batch["labels"].to(self.device),
-                )
+            self.optimizer.zero_grad()
+            for step, batch in enumerate(progress_bar, start=1):
+                with torch.autocast(self.device.type, dtype=torch.bfloat16, enabled=self.bf16):
+                    outputs = self.model(
+                        batch["input_ids"].to(self.device),
+                        attention_mask=batch["attention_mask"].to(self.device),
+                        labels=batch["labels"].to(self.device),
+                    )
                 loss = outputs.loss
-                loss.backward()
-                self.optimizer.step()
+                (loss / self.grad_accum_steps).backward()
+                if step % self.grad_accum_steps == 0 or step == len(self.train_loader):
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
 
                 total_loss += loss.item()
                 num_batches += 1

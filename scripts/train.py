@@ -68,6 +68,15 @@ def parse_args():
     parser.add_argument(
         "--learning-rate", type=float, default=1e-5, help="Learning rate for training"
     )
+    parser.add_argument(
+        "--grad-accum",
+        type=int,
+        default=1,
+        help="Gradient accumulation steps (effective batch = batch size * grad accum)",
+    )
+    parser.add_argument(
+        "--bf16", action="store_true", help="Train with bfloat16 autocast to reduce GPU memory"
+    )
     return parser.parse_args()
 
 
@@ -146,6 +155,8 @@ def main():
         epochs=args.epochs,
         learning_rate=args.learning_rate,
         save_path=args.output_dir,
+        grad_accum_steps=args.grad_accum,
+        bf16=args.bf16,
     )
 
     trainer.train()
